@@ -24,4 +24,4 @@ desktop.ini
 
 # Large recordings / generated output (uncomment if you don't want them in git)
 data/
-# outputs/
+outputs/
