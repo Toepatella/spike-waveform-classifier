@@ -10,4 +10,5 @@ dependencies = [
     "pandas>=3.1.0",
     "scikit-learn>=1.9.1",
     "scipy>=1.18.1",
+    "spikeinterface~=0.105.0",
 ]
