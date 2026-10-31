@@ -1,63 +1,40 @@
-"""Load the sorted recordings from Juan (SpikeInterface 0.105 SortingAnalyzer folders).
+"""Load Juan's sorted recordings."""
 
-Parts of these folders (the preprocessing recipe and saved PCA models) are stored
-in Python's pickle format. Reading pickle can run code, so numcodecs blocks it by
-default. We allow it only while loading these trusted lab files, then turn the
-block back on.
-"""
-
+import os
 import pickle
-from contextlib import contextmanager
+from pathlib import Path
 
 import numcodecs.pickles
+import pandas as pd
 import spikeinterface as si
 
-from paths import DATA_DIR
+# Data lives outside the repo (too big for git/OneDrive)
+DATA_DIR = Path(os.environ.get("SPIKE_DATA_DIR", r"C:\Users\tonyt\spike-data"))
 
 
-@contextmanager
-def _allow_pickle():
-    previous = numcodecs.pickles.ALLOW_UNSAFE_PICKLE_DECODE
+def load_analyzer(session, probe):
+    # Parts of the folder are pickled, which numcodecs blocks by default.
+    # Allow it only while loading Juan's files.
     numcodecs.pickles.ALLOW_UNSAFE_PICKLE_DECODE = True
     try:
-        yield
+        return si.load_sorting_analyzer(DATA_DIR / session / probe / "Postcuration_Analyzer.zarr")
     finally:
-        numcodecs.pickles.ALLOW_UNSAFE_PICKLE_DECODE = previous
+        numcodecs.pickles.ALLOW_UNSAFE_PICKLE_DECODE = False
 
 
-def load_analyzer(session: str, probe: str):
-    """Load one probe's SortingAnalyzer, e.g. load_analyzer("2026-07-21", "PFC")."""
-    folder = DATA_DIR / session / probe / "Postcuration_Analyzer.zarr"
-    with _allow_pickle():
-        # Loads all saved extensions now, so nothing pickled is read later.
-        return si.load_sorting_analyzer(folder, load_extensions=True)
+def load_metrics(session, probe):
+    # Use the CSV: the analyzer's saved copy is missing SNR for HPC
+    return pd.read_csv(DATA_DIR / session / probe / "quality_metrics.csv", index_col=0)
 
 
-class _PlainDataUnpickler(pickle.Unpickler):
-    # Only plain data (dicts, strings, numbers) is allowed: any attempt to
-    # import a class or function is refused, so loading can't run code.
-    def find_class(self, module, name):
-        raise pickle.UnpicklingError(f"Refusing to load {module}.{name}")
+def load_area_limits(session, probe):
+    # e.g. {"PFC": 3650, "White Matter": 2350, "OFC": 1200}
+    with open(DATA_DIR / session / probe / "Anatomical_limits.pkl", "rb") as f:
+        return pickle.load(f)
 
 
-def load_area_limits(session: str, probe: str) -> dict[str, float]:
-    """Read Juan's Anatomical_limits.pkl, e.g. {"PFC": 3650, "White Matter": 2350, "OFC": 1200}.
-
-    Values are distances in micrometres from the probe tip.
-    """
-    path = DATA_DIR / session / probe / "Anatomical_limits.pkl"
-    with open(path, "rb") as f:
-        return dict(_PlainDataUnpickler(f).load())
-
-
-def assign_area(depth_um: float, limits: dict[str, float]) -> str:
-    """Label a position on the probe with its brain area.
-
-    Assumption (to confirm with Juan): each value in the limits file is the
-    TOP edge of that area, counted up from the probe tip. So for the PFC probe,
-    OFC is 0-1200 um, white matter 1200-2350 um and PFC 2350-3650 um. Anything
-    above the highest edge is labelled "above".
-    """
+def area_of(depth_um, limits):
+    # Assumes each limit is the TOP of that area, in um from the probe tip (confirm with Juan)
     for area, top in sorted(limits.items(), key=lambda item: item[1]):
         if depth_um <= top:
             return area
