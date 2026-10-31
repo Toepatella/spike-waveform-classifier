@@ -1,10 +1,16 @@
 """Run every step in order: uv run main.py"""
 
-import runpy
+import good_cells
+import plot_waveforms
 
-# Each script still works on its own; this just runs them one after another.
-for script in ["good_cells.py", "plot_waveforms.py"]:
-    print(f"--- Running {script} ---")
-    runpy.run_path(script, run_name="__main__")
 
-print("--- Done. Results are in outputs/ ---")
+def main():
+    print("--- Task 0: picking good cells ---")
+    good_cells.main()
+    print("--- Task 1: plotting waveforms ---")
+    plot_waveforms.main()
+    print("--- Done. Results are in outputs/ ---")
+
+
+if __name__ == "__main__":
+    main()

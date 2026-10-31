@@ -10,6 +10,9 @@ Run everything with `uv run main.py`, or run the steps one at a time:
 
 `outputs/` is ignored by git; rerun the scripts to recreate it.
 
+Each script keeps its work in a `main()` function; `main.py` imports the scripts and calls
+those functions in order.
+
 ## Good-cell rule
 
 A good cell should give a clean average waveform from one neuron: contamination
