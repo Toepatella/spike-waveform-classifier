@@ -18,11 +18,15 @@ def load_analyzer(session, probe):
     Parts of the folder are pickled, which numcodecs blocks by default because pickle can run
     code. The block is lifted only while loading Juan's trusted files. read_only keeps his
     files unchanged.
+
+    load_extensions=False: each saved result (templates, correlograms, ...) loads the first time
+    get_extension asks for it. This skips Juan's saved PCA models, which we never use; they are
+    pickled scikit-learn objects and warn because he saved them with an older scikit-learn.
     """
     numcodecs.pickles.ALLOW_UNSAFE_PICKLE_DECODE = True
     try:
         return si.load_sorting_analyzer(
-            DATA_DIR / session / probe / "Postcuration_Analyzer.zarr", read_only=True
+            DATA_DIR / session / probe / "Postcuration_Analyzer.zarr", read_only=True, load_extensions=False
         )
     finally:
         numcodecs.pickles.ALLOW_UNSAFE_PICKLE_DECODE = False
