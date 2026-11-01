@@ -26,5 +26,6 @@ desktop.ini
 data/
 outputs/
 
-# Claude Code project notes (kept on this computer only)
+# Claude Code project notes and the proposal (kept on this computer only)
 CLAUDE.md
+docs/
