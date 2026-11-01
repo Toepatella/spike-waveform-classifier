@@ -222,14 +222,14 @@ def plot_histograms(units):
 
 
 def print_summary(units):
-    """Units, good units, good negative-spike units and rescued good units per area."""
+    """Units, good units, units in the main analysis (good and downward) and rescued good units per area."""
     for (probe, area), group in units.groupby(["probe", "area"]):
         good = group[group.good]
-        negative = good[good.polarity == "negative"]
+        main = group[group.main_analysis]
         rescued = good[good.rescued_by_acg]
         print(
             f"{probe} {area:13}  units {len(group):3}  good {len(good):3}  "
-            f"good negative-spike {len(negative):3}  good by gap rescue {len(rescued):2}"
+            f"main analysis {len(main):3}  good by gap rescue {len(rescued):2}"
         )
 
 
@@ -240,6 +240,9 @@ def main():
         tables.append(build_unit_table(probe))
     units = pd.concat(tables, ignore_index=True)
     units["low_presence"] = units.presence_ratio < LOW_PRESENCE
+    # Upward spikes are likely axons, not cell bodies, and trough-based features don't fit
+    # them. They stay in the table but out of the main analysis.
+    units["main_analysis"] = units.good & (units.polarity == "negative")
     units.to_csv(f"outputs/good_cells_{SESSION}.csv", index=False)
     plot_histograms(units)
     print_summary(units)

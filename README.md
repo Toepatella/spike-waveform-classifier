@@ -21,7 +21,8 @@ split-off copy of another unit (near-identical template, and the two never fire 
 of each other). Juan's score assumes a steady firing rate, so bursty cells (mostly
 narrow-spiking) that fail it are kept anyway if their autocorrelogram shows a clean
 refractory gap. They are marked in `rescued_by_acg`, so results can be checked without them.
-Positive-going spikes are kept but marked in `polarity`. Low-presence units are kept but
+Positive-going (upward) spikes are likely axonal, so they are kept in the table but left out
+of the main analysis: `main_analysis` = good and downward. Low-presence units are kept but
 flagged for a look.
 
 ## Data provenance

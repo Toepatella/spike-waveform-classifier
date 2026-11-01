@@ -110,11 +110,20 @@ def plot_area(analyzer, probe_units, area):
     rejected = in_area[~in_area.good]
     prefix = f"outputs/waveforms_{SESSION}_{area}"
 
+    main = in_area[in_area.main_analysis]  # good and downward
+    upward = good[~good.main_analysis]
+
     # random_state fixes the sample so reruns show the same units
-    good_sample = good.sample(min(UNITS_PER_FIGURE, len(good)), random_state=0)
+    main_sample = main.sample(min(UNITS_PER_FIGURE, len(main)), random_state=0)
     plot_units(
-        analyzer, good_sample,
-        f"{area}: random good units ({len(good)} of {len(in_area)} are good)", f"{prefix}_good.png",
+        analyzer, main_sample,
+        f"{area}: random good downward units ({len(main)} of {len(in_area)} are in the main analysis)",
+        f"{prefix}_good.png",
+    )
+    upward_sample = upward.sample(min(UNITS_PER_FIGURE, len(upward)), random_state=0)
+    plot_units(
+        analyzer, upward_sample,
+        f"{area}: good upward units, kept out of the main analysis ({len(upward)})", f"{prefix}_upward.png",
     )
     plot_units(
         analyzer, pick_rejected_examples(rejected),
