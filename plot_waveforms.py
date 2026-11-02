@@ -4,6 +4,8 @@ Needs the table from good_cells.py. Run alone with `uv run plot_waveforms.py`, o
 tasks together with `uv run main.py`.
 """
 
+from pathlib import Path
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -21,6 +23,8 @@ def note(unit):
     notes = []
     if unit.fail_reason:
         notes.append(f"fails: {unit.fail_reason}")
+    if unit.good_loose and not unit.good:
+        notes.append("good at Juan's 0.5 cut")
     if unit.rescued_by_acg:
         notes.append(f"clean autocorrelogram (gap {unit.acg_gap:.2f})")
     if pd.notna(unit.same_neuron_as):
@@ -35,6 +39,7 @@ def note(unit):
 def plot_units(analyzer, rows, title, path):
     """One panel per unit, on the sites near it. Faint lines: 50 spikes. Bold line: their average."""
     if rows.empty:
+        Path(path).unlink(missing_ok=True)  # no units: remove any figure left from an earlier run
         return
     nrows = int(np.ceil(len(rows) / 4))
     fig, axes = plt.subplots(nrows, 4, figsize=(13, 4.5 * nrows), squeeze=False)
@@ -58,6 +63,7 @@ def plot_units(analyzer, rows, title, path):
 def plot_acgs(analyzer, rows, title, path):
     """One autocorrelogram per unit. One neuron leaves an empty gap around 0 ms (its refractory period)."""
     if rows.empty:
+        Path(path).unlink(missing_ok=True)  # no units: remove any figure left from an earlier run
         return
     ccgs, bins = analyzer.get_extension("correlograms").get_data()
     unit_ids = list(analyzer.unit_ids)
@@ -143,6 +149,14 @@ def plot_area(analyzer, probe_units, area):
     plot_acgs(
         analyzer, good[good.rescued_by_acg],
         f"{area}: autocorrelograms of units kept by the gap check", f"outputs/acg_{SESSION}_{area}_rescued.png",
+    )
+    # Check 1: what Juan's looser contamination cut would add to the main analysis
+    loose_only = in_area[in_area.main_analysis_loose & ~in_area.main_analysis]
+    loose_sample = loose_only.sample(min(UNITS_PER_FIGURE, len(loose_only)), random_state=0)
+    plot_acgs(
+        analyzer, loose_sample,
+        f"{area}: autocorrelograms of random units good only at Juan's 0.5 cut ({len(loose_only)} in total)",
+        f"outputs/acg_{SESSION}_{area}_loose.png",
     )
 
 

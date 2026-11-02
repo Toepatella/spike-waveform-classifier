@@ -14,10 +14,15 @@ from load_data import area_of, load_analyzer, load_area_limits, load_metrics
 SESSION = "2026-07-21"
 PROBES = ["PFC", "HPC"]
 
-# Good-cell rule: a clean average waveform from one neuron
+# Good-cell rule: a clean average waveform from one neuron. The spike-count and size cuts are
+# Juan's (email, 2026-11-02). The contamination cut stays at 0.1: units that pass only at his
+# suggested 0.5 look like mixed clusters on his waveform isolation scores. His 0.5 is kept as
+# a robustness check (check 1, good_loose).
 MAX_CONTAMINATION = 0.1  # share of spikes from other neurons (Juan's rp_contamination, Llobet 2022)
-MIN_SPIKES = 200  # enough spikes for a clean average
-MIN_SNR = 3  # spike clearly above noise
+LOOSE_CONTAMINATION = 0.5  # Juan's suggested cut, used only for check 1
+MIN_SPIKES = 500  # need more than this; Juan's average waveforms use up to 500 random spikes
+MIN_SNR = 3  # spike clearly above the channel's noise...
+MIN_AMPLITUDE_UV = 30  # ...or bigger than this (uV), so big units on noisy channels still count
 # rp_contamination assumes a steady firing rate, so it over-rejects bursty (mostly
 # narrow-spiking) cells. Rescue: keep a unit anyway if its own autocorrelogram shows a
 # clean refractory gap, which is judged against its local firing rate. Rescued units are
@@ -159,20 +164,25 @@ def build_unit_table(probe):
         "acg_gap": acg_gap,
         "isi_violations_ratio": metrics.isi_violations_ratio.values,
         "snr": metrics.snr.values,
+        "amplitude_median": metrics.amplitude_median.values,  # biggest deflection of the average spike (uV)
         "presence_ratio": metrics.presence_ratio.values,
         "polarity": get_polarity(templates),
         "possible_duplicate_of": possible_duplicate_of,
     })
+    table["clean_acg"] = clean_acg
     # Rescued: Juan's score says contaminated, but the unit's own autocorrelogram has a clean gap
-    table["rescued_by_acg"] = (table.rp_contamination > MAX_CONTAMINATION) & np.array(clean_acg)
+    table["rescued_by_acg"] = (table.rp_contamination > MAX_CONTAMINATION) & table.clean_acg
 
     # The rule, one column per criterion. Written as "passes" so a missing value counts as a fail.
     passes = pd.DataFrame({
         "contamination": (table.rp_contamination <= MAX_CONTAMINATION) | table.rescued_by_acg,
-        "spikes": table.num_spikes >= MIN_SPIKES,
-        "snr": table.snr >= MIN_SNR,
+        "spikes": table.num_spikes > MIN_SPIKES,
+        "snr_or_amplitude": (table.snr >= MIN_SNR) | (table.amplitude_median > MIN_AMPLITUDE_UV),
     })
     passes_all = passes.all(axis=1).values
+    # Check 1: the same rule with Juan's looser contamination cut
+    loose_contamination = (table.rp_contamination < LOOSE_CONTAMINATION) | table.clean_acg
+    passes_loose = (loose_contamination & passes.spikes & passes.snr_or_amplitude).values
 
     # Split neurons: keep one piece of each and mark the others as copies of it
     same_neuron_as = [None] * len(table)
@@ -194,42 +204,57 @@ def build_unit_table(probe):
         fail_reason.append("+".join(failed))
     table["fail_reason"] = fail_reason
     table["good"] = ~fails.any(axis=1)
+    # Check 1: good at the looser cut. A copy is dropped only if the piece it copies passes it too.
+    copies_loose_keeper = table.same_neuron_as.isin(table.unit_id[passes_loose])
+    table["good_loose"] = passes_loose & ~copies_loose_keeper.values
     return table
 
 
 def plot_histograms(units):
-    """Histograms of each measure with its cutoff in red, one figure per probe."""
+    """Histograms of each measure with its cutoff in red, one figure per probe.
+
+    The contamination panel also shows Juan's looser cut (check 1) as a dotted line.
+    """
     panels = [
         # (column, cutoff, bin edges)
         ("rp_contamination", MAX_CONTAMINATION, np.linspace(0, 1, 51)),
         ("num_spikes", MIN_SPIKES, np.logspace(1, 5, 50)),
         ("snr", MIN_SNR, np.linspace(0, 15, 50)),
+        ("amplitude_median", MIN_AMPLITUDE_UV, np.linspace(0, 200, 50)),
         ("presence_ratio", LOW_PRESENCE, np.linspace(0, 1, 50)),
     ]
     for probe in PROBES:
         probe_units = units[units.probe == probe]
-        fig, axes = plt.subplots(1, 4, figsize=(16, 3.5))
+        fig, axes = plt.subplots(1, len(panels), figsize=(20, 3.5))
         for ax, (column, cutoff, bins) in zip(axes, panels):
             # clip so values past the axis pile up at the edge instead of vanishing
             ax.hist(probe_units[column].clip(bins[0], bins[-1]), bins=bins, color="gray")
             ax.axvline(cutoff, color="red", linestyle="--")
             ax.set_title(column)
+        axes[0].axvline(LOOSE_CONTAMINATION, color="red", linestyle=":")
+        axes[0].set_title("rp_contamination (dotted: check 1)")
         axes[1].set_xscale("log")
-        fig.suptitle(f"{probe}: {probe_units.good.sum()} of {len(probe_units)} good")
+        axes[3].set_title("amplitude_median (uV)")
+        fig.suptitle(
+            f"{probe}: {probe_units.good.sum()} of {len(probe_units)} good "
+            f"({probe_units.good_loose.sum()} at Juan's looser contamination cut)"
+        )
         fig.tight_layout()
         fig.savefig(f"outputs/metrics_{SESSION}_{probe}.png", dpi=110)
         plt.close(fig)
 
 
 def print_summary(units):
-    """Units, good units, units in the main analysis (good and downward) and rescued good units per area."""
+    """Per area: units, good units and main-analysis units (good and downward), then the main
+    analysis under check 1 (Juan's looser contamination cut) and check 2 (without the gap rescue)."""
     for (probe, area), group in units.groupby(["probe", "area"]):
         good = group[group.good]
         main = group[group.main_analysis]
-        rescued = good[good.rescued_by_acg]
+        rescued = main[main.rescued_by_acg]
+        loose = group[group.main_analysis_loose]
         print(
-            f"{probe} {area:13}  units {len(group):3}  good {len(good):3}  "
-            f"main analysis {len(main):3}  good by gap rescue {len(rescued):2}"
+            f"{probe} {area:13}  units {len(group):3}  good {len(good):3}  main analysis {len(main):3}  "
+            f"check 1 {len(loose):3}  check 2 {len(main) - len(rescued):3}  kept by gap rescue {len(rescued):2}"
         )
 
 
@@ -240,9 +265,10 @@ def main():
         tables.append(build_unit_table(probe))
     units = pd.concat(tables, ignore_index=True)
     units["low_presence"] = units.presence_ratio < LOW_PRESENCE
-    # Upward spikes are likely axons, not cell bodies, and trough-based features don't fit
-    # them. They stay in the table but out of the main analysis.
+    # Upward spikes are likely axons, not cell bodies (Juan agrees), and trough-based features
+    # don't fit them. They stay in the table but out of the main analysis.
     units["main_analysis"] = units.good & (units.polarity == "negative")
+    units["main_analysis_loose"] = units.good_loose & (units.polarity == "negative")
     units.to_csv(f"outputs/good_cells_{SESSION}.csv", index=False)
     plot_histograms(units)
     print_summary(units)

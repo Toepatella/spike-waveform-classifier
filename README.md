@@ -15,15 +15,40 @@ those functions in order.
 
 ## Good-cell rule
 
-A good cell should give a clean average waveform from one neuron: contamination
-(Juan's `rp_contamination`) at most 10%, at least 200 spikes, SNR at least 3, and not a
-split-off copy of another unit (near-identical template, and the two never fire within 1 ms
-of each other). Juan's score assumes a steady firing rate, so bursty cells (mostly
-narrow-spiking) that fail it are kept anyway if their autocorrelogram shows a clean
-refractory gap. They are marked in `rescued_by_acg`, so results can be checked without them.
-Positive-going (upward) spikes are likely axonal, so they are kept in the table but left out
-of the main analysis: `main_analysis` = good and downward. Low-presence units are kept but
-flagged for a look.
+A good cell should give a clean average waveform from one neuron:
+
+- contamination (Juan's `rp_contamination`, Llobet et al. 2022) at most 10%;
+- more than 500 spikes (Juan's average waveforms use up to 500 random spikes);
+- SNR at least 3, or median amplitude above 30 µV, so big units on noisy channels still count;
+- not a split-off copy of another unit (near-identical template, and the two never fire
+  within 1 ms of each other).
+
+The spike and size cuts follow Juan's advice (2026-11-02). He suggested 0.5 for
+contamination, but units that pass only at 0.5 look like mixed clusters on his waveform
+isolation scores (`nn_hit_rate`, silhouette). So 10% stays the main cut, and 0.5 is a
+robustness check.
+
+Juan's score assumes a steady firing rate, so bursty cells (mostly narrow-spiking) that
+fail it are kept anyway if their autocorrelogram shows a clean refractory gap
+(`clean_acg`). These units are marked in `rescued_by_acg`.
+
+Positive-going (upward) spikes are likely axonal (Juan agrees), so they stay in the table
+but are left out of the main analysis. Low-presence units are kept but flagged for a look.
+
+The main analysis and two robustness checks are columns in
+`outputs/good_cells_<session>.csv`:
+
+| Version | Units | How to select them |
+|---|---|---|
+| Main | good and downward | `main_analysis` |
+| Check 1 | as main, but contamination below 0.5 (Juan's cut) | `main_analysis_loose` |
+| Check 2 | as main, without the units kept by the autocorrelogram check | `main_analysis & ~rescued_by_acg` |
+
+The main version was chosen before any feature results existed. Report results for all
+three versions.
+
+Figure titles show two IDs. `unit` is SpikeInterface's unit ID and `Phy` is the cluster ID
+in Juan's Phy files. They differ for about half the units, so use Phy IDs with Juan.
 
 ## Data provenance
 
