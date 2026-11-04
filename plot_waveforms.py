@@ -1,7 +1,6 @@
 """Task 1: sparse waveform plots of good, rejected and flagged units.
 
-Needs the table from good_cells.py. Run alone with `uv run plot_waveforms.py`, or both
-tasks together with `uv run main.py`.
+Reads the unit table written by good_cells.py.
 """
 
 from pathlib import Path
@@ -24,7 +23,7 @@ def note(unit):
     if unit.fail_reason:
         notes.append(f"fails: {unit.fail_reason}")
     if unit.good_loose and not unit.good:
-        notes.append("good at Juan's 0.5 cut")
+        notes.append("good at the 0.5 cut")
     if unit.rescued_by_acg:
         notes.append(f"clean autocorrelogram (gap {unit.acg_gap:.2f})")
     if pd.notna(unit.same_neuron_as):
@@ -82,7 +81,7 @@ def plot_acgs(analyzer, rows, title, path):
         draw_acg(ax, ccgs, bins, k)
         ax.set_title(
             f"unit {unit.unit_id} (Phy {unit.phy_cluster_id})\n"
-            f"Juan's contam {unit.rp_contamination:.2f}  gap {unit.acg_gap:.2f}",
+            f"rp_contam {unit.rp_contamination:.2f}  gap {unit.acg_gap:.2f}",
             fontsize=7,
         )
     for ax in axes.flat[len(rows):]:
@@ -95,7 +94,7 @@ def plot_acgs(analyzer, rows, title, path):
 
 def plot_review(analyzer, rows, title, path):
     """Sheet for checking units by eye: each unit's waveforms and autocorrelogram side by side,
-    two units per row. Titles lead with the Phy ID, which is what Juan sees in Phy."""
+    two units per row. Titles lead with the Phy ID, to match Phy."""
     if rows.empty:
         Path(path).unlink(missing_ok=True)  # no units: remove any figure left from an earlier run
         return
@@ -118,7 +117,7 @@ def plot_review(analyzer, rows, title, path):
             fontsize=8,
         )
         acg_ax.set_title(
-            f"Juan's contam {unit.rp_contamination:.2f}  gap {unit.acg_gap:.2f}\n"
+            f"rp_contam {unit.rp_contamination:.2f}  gap {unit.acg_gap:.2f}\n"
             f"nn_hit_rate {unit.nn_hit_rate:.2f}",
             fontsize=8,
         )
@@ -194,12 +193,12 @@ def plot_area(analyzer, probe_units, area):
         analyzer, good[good.rescued_by_acg],
         f"{area}: autocorrelograms of units kept by the gap check", f"outputs/acg_{SESSION}_{area}_rescued.png",
     )
-    # Check 1: what Juan's looser contamination cut would add to the main analysis
+    # Check 1: what the looser 0.5 contamination cut would add to the main analysis
     loose_only = in_area[in_area.main_analysis_loose & ~in_area.main_analysis]
     loose_sample = loose_only.sample(min(UNITS_PER_FIGURE, len(loose_only)), random_state=0)
     plot_acgs(
         analyzer, loose_sample,
-        f"{area}: autocorrelograms of random units good only at Juan's 0.5 cut ({len(loose_only)} in total)",
+        f"{area}: autocorrelograms of random units good only at the 0.5 cut ({len(loose_only)} in total)",
         f"outputs/acg_{SESSION}_{area}_loose.png",
     )
     # Manual review: the area's units listed in the review file, in Phy ID order

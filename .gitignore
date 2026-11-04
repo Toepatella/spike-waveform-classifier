@@ -22,10 +22,10 @@ desktop.ini
 # Secrets
 .env
 
-# Large recordings / generated output (uncomment if you don't want them in git)
+# Data and generated output
 data/
 outputs/
 
-# Claude Code project notes and the proposal (kept on this computer only)
+# Local notes
 CLAUDE.md
 docs/

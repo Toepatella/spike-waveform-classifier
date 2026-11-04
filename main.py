@@ -1,4 +1,4 @@
-"""Run every step in order: uv run main.py"""
+"""Run Task 0 and Task 1 in order."""
 
 import good_cells
 import plot_waveforms

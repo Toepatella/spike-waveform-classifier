@@ -1,7 +1,4 @@
-"""Task 0: decide which units are good cells.
-
-Run alone with `uv run good_cells.py`, or together with Task 1 with `uv run main.py`.
-"""
+"""Task 0: decide which units are good cells."""
 
 from pathlib import Path
 
@@ -14,13 +11,13 @@ from load_data import area_of, load_analyzer, load_area_limits, load_metrics
 SESSION = "2026-07-21"
 PROBES = ["PFC", "HPC"]
 
-# Good-cell rule: a clean average waveform from one neuron. The spike-count and size cuts are
-# Juan's (email, 2026-11-02). The contamination cut stays at 0.1: units that pass only at his
-# suggested 0.5 look like mixed clusters on his waveform isolation scores. His 0.5 is kept as
-# a robustness check (check 1, good_loose).
-MAX_CONTAMINATION = 0.1  # share of spikes from other neurons (Juan's rp_contamination, Llobet 2022)
-LOOSE_CONTAMINATION = 0.5  # Juan's suggested cut, used only for check 1
-MIN_SPIKES = 500  # need more than this; Juan's average waveforms use up to 500 random spikes
+# Good-cell rule: a clean average waveform from one neuron. The spike-count and size cuts were
+# recommended with the sorted data (2026-11-02). The contamination cut stays at 0.1: units that
+# pass only at the recommended 0.5 look like mixed clusters on the waveform isolation scores.
+# 0.5 is kept as a robustness check (check 1, good_loose).
+MAX_CONTAMINATION = 0.1  # share of spikes from other neurons (rp_contamination, Llobet 2022)
+LOOSE_CONTAMINATION = 0.5  # recommended cut, used only for check 1
+MIN_SPIKES = 500  # need more than this; the average waveforms use up to 500 random spikes
 MIN_SNR = 3  # spike clearly above the channel's noise...
 MIN_AMPLITUDE_UV = 30  # ...or bigger than this (uV), so big units on noisy channels still count
 # rp_contamination assumes a steady firing rate, so it over-rejects bursty (mostly
@@ -41,7 +38,7 @@ MIN_BASELINE = 2  # spikes per 1 ms bin needed to judge the gap
 LOW_PRESENCE = 0.5
 
 # Manual review (rule fixed on 2026-11-03, before the review and before any Task 2 results):
-# Juan checks by eye the units kept only by the gap rescue, and the verdicts are typed into
+# The units kept only by the gap rescue are checked by eye, and the verdicts are typed into
 # this file. "exclude" removes a unit from every version; "keep" and "unsure" leave it in.
 # The review can only remove units, never add them.
 REVIEW_FILE = Path("curation") / f"manual_review_{SESSION}.csv"
@@ -209,7 +206,7 @@ def build_unit_table(probe):
         "possible_duplicate_of": possible_duplicate_of,
     })
     table["clean_acg"] = clean_acg
-    # Rescued: Juan's score says contaminated, but the unit's own autocorrelogram has a clean gap
+    # Rescued: rp_contamination says contaminated, but the unit's own autocorrelogram has a clean gap
     table["rescued_by_acg"] = (table.rp_contamination > MAX_CONTAMINATION) & table.clean_acg
     table["review_verdict"] = load_review_verdicts(probe, table)
 
@@ -221,7 +218,7 @@ def build_unit_table(probe):
         "manual_review": table.review_verdict != "exclude",
     })
     passes_all = passes.all(axis=1).values
-    # Check 1: the same rule with Juan's looser contamination cut
+    # Check 1: the same rule with the looser 0.5 contamination cut
     loose_contamination = (table.rp_contamination < LOOSE_CONTAMINATION) | table.clean_acg
     passes_loose = (
         loose_contamination & passes.spikes & passes.snr_or_amplitude & passes.manual_review
@@ -256,7 +253,7 @@ def build_unit_table(probe):
 def plot_histograms(units):
     """Histograms of each measure with its cutoff in red, one figure per probe.
 
-    The contamination panel also shows Juan's looser cut (check 1) as a dotted line.
+    The contamination panel also shows the looser 0.5 cut (check 1) as a dotted line.
     """
     panels = [
         # (column, cutoff, bin edges)
@@ -280,7 +277,7 @@ def plot_histograms(units):
         axes[3].set_title("amplitude_median (uV)")
         fig.suptitle(
             f"{probe}: {probe_units.good.sum()} of {len(probe_units)} good "
-            f"({probe_units.good_loose.sum()} at Juan's looser contamination cut)"
+            f"({probe_units.good_loose.sum()} at the 0.5 contamination cut)"
         )
         fig.tight_layout()
         fig.savefig(f"outputs/metrics_{SESSION}_{probe}.png", dpi=110)
@@ -289,7 +286,7 @@ def plot_histograms(units):
 
 def print_summary(units):
     """Per area: units, good units and main-analysis units (good and downward), then the main
-    analysis under check 1 (Juan's looser contamination cut) and check 2 (without the gap rescue),
+    analysis under check 1 (the 0.5 contamination cut) and check 2 (without the gap rescue),
     and the manual review: units still waiting for a verdict and units it excluded."""
     for (probe, area), group in units.groupby(["probe", "area"]):
         good = group[group.good]
@@ -312,7 +309,7 @@ def main():
         tables.append(build_unit_table(probe))
     units = pd.concat(tables, ignore_index=True)
     units["low_presence"] = units.presence_ratio < LOW_PRESENCE
-    # Upward spikes are likely axons, not cell bodies (Juan agrees), and trough-based features
+    # Upward spikes are likely axons, not cell bodies, and trough-based features
     # don't fit them. They stay in the table but out of the main analysis.
     units["main_analysis"] = units.good & (units.polarity == "negative")
     units["main_analysis_loose"] = units.good_loose & (units.polarity == "negative")
