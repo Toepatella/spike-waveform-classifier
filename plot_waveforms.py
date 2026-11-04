@@ -33,6 +33,8 @@ def note(unit):
         notes.append(f"possible duplicate of {unit.possible_duplicate_of:.0f}")
     if unit.low_presence:
         notes.append(f"presence {unit.presence_ratio:.2f}")
+    if unit.review_verdict:
+        notes.append(f"review: {unit.review_verdict}")
     return ", ".join(notes)
 
 
@@ -60,6 +62,12 @@ def plot_units(analyzer, rows, title, path):
     plt.close(fig)
 
 
+def draw_acg(ax, ccgs, bins, k):
+    """Unit k's autocorrelogram (its correlogram with itself) as gray bars."""
+    ax.bar(bins[:-1], ccgs[k, k], width=np.diff(bins), align="edge", color="gray")
+    ax.set_xlabel("lag (ms)", fontsize=7)
+
+
 def plot_acgs(analyzer, rows, title, path):
     """One autocorrelogram per unit. One neuron leaves an empty gap around 0 ms (its refractory period)."""
     if rows.empty:
@@ -71,14 +79,50 @@ def plot_acgs(analyzer, rows, title, path):
     fig, axes = plt.subplots(nrows, 4, figsize=(13, 2.6 * nrows), squeeze=False)
     for ax, unit in zip(axes.flat, rows.itertuples()):
         k = unit_ids.index(unit.unit_id)  # position of this unit in the analyzer's arrays
-        ax.bar(bins[:-1], ccgs[k, k], width=np.diff(bins), align="edge", color="gray")
+        draw_acg(ax, ccgs, bins, k)
         ax.set_title(
             f"unit {unit.unit_id} (Phy {unit.phy_cluster_id})\n"
             f"Juan's contam {unit.rp_contamination:.2f}  gap {unit.acg_gap:.2f}",
             fontsize=7,
         )
-        ax.set_xlabel("lag (ms)", fontsize=7)
     for ax in axes.flat[len(rows):]:
+        ax.set_visible(False)
+    fig.suptitle(title)
+    fig.tight_layout(rect=(0, 0, 1, 1 - 0.4 / fig.get_figheight()))
+    fig.savefig(path, dpi=110)
+    plt.close(fig)
+
+
+def plot_review(analyzer, rows, title, path):
+    """Sheet for checking units by eye: each unit's waveforms and autocorrelogram side by side,
+    two units per row. Titles lead with the Phy ID, which is what Juan sees in Phy."""
+    if rows.empty:
+        Path(path).unlink(missing_ok=True)  # no units: remove any figure left from an earlier run
+        return
+    ccgs, bins = analyzer.get_extension("correlograms").get_data()
+    unit_ids = list(analyzer.unit_ids)
+    nrows = int(np.ceil(len(rows) / 2))
+    fig, axes = plt.subplots(nrows, 4, figsize=(14, 4 * nrows), squeeze=False)
+    panels = list(axes.flat)  # per unit: a waveform panel, then its autocorrelogram panel
+    waveform_panels = []
+    for i in range(len(rows)):
+        waveform_panels.append(panels[2 * i])
+    sw.plot_unit_waveforms(analyzer, unit_ids=list(rows.unit_id), axes=waveform_panels, max_spikes_per_unit=50)
+    for i, unit in enumerate(rows.itertuples()):
+        waveform_ax = panels[2 * i]
+        acg_ax = panels[2 * i + 1]
+        draw_acg(acg_ax, ccgs, bins, unit_ids.index(unit.unit_id))
+        waveform_ax.set_title(
+            f"Phy {unit.phy_cluster_id} (unit {unit.unit_id})   review: {unit.review_verdict}\n"
+            f"{unit.num_spikes} spikes, {unit.firing_rate:.1f} Hz, SNR {unit.snr:.1f}",
+            fontsize=8,
+        )
+        acg_ax.set_title(
+            f"Juan's contam {unit.rp_contamination:.2f}  gap {unit.acg_gap:.2f}\n"
+            f"nn_hit_rate {unit.nn_hit_rate:.2f}",
+            fontsize=8,
+        )
+    for ax in panels[2 * len(rows):]:
         ax.set_visible(False)
     fig.suptitle(title)
     fig.tight_layout(rect=(0, 0, 1, 1 - 0.4 / fig.get_figheight()))
@@ -158,11 +202,19 @@ def plot_area(analyzer, probe_units, area):
         f"{area}: autocorrelograms of random units good only at Juan's 0.5 cut ({len(loose_only)} in total)",
         f"outputs/acg_{SESSION}_{area}_loose.png",
     )
+    # Manual review: the area's units listed in the review file, in Phy ID order
+    listed = in_area[in_area.review_verdict != ""].sort_values("phy_cluster_id")
+    plot_review(
+        analyzer, listed,
+        f"{area}: units for manual review ({len(listed)}). One neuron, or a mix?",
+        f"outputs/review_{SESSION}_{area}.png",
+    )
 
 
 def main():
     units = pd.read_csv(f"outputs/good_cells_{SESSION}.csv")
     units["fail_reason"] = units.fail_reason.fillna("")  # good units have no fail reason
+    units["review_verdict"] = units.review_verdict.fillna("")  # units not listed for review
     for probe, areas in AREAS.items():
         analyzer = load_analyzer(SESSION, probe)  # slow, so load once per probe
         probe_units = units[units.probe == probe]

@@ -40,6 +40,13 @@ MIN_BASELINE = 2  # spikes per 1 ms bin needed to judge the gap
 # session (silent for long stretches), not just slowly
 LOW_PRESENCE = 0.5
 
+# Manual review (rule fixed on 2026-11-03, before the review and before any Task 2 results):
+# Juan checks by eye the units kept only by the gap rescue, and the verdicts are typed into
+# this file. "exclude" removes a unit from every version; "keep" and "unsure" leave it in.
+# The review can only remove units, never add them.
+REVIEW_FILE = Path("curation") / f"manual_review_{SESSION}.csv"
+REVIEW_VERDICTS = ["keep", "exclude", "unsure"]
+
 
 def get_polarity(templates):
     """'negative' or 'positive' for each unit: the sign of the biggest deflection on its biggest channel.
@@ -128,6 +135,36 @@ def choose_keeper(members, passes, rescued, num_spikes):
     return max(candidates, key=lambda k: num_spikes[k])
 
 
+def load_review_verdicts(probe, table):
+    """Each unit's status in the manual review file, in table order.
+
+    "" means not listed for review, "pending" means listed but not reviewed yet, and otherwise
+    it's the verdict typed into the file. A listed unit whose Phy ID and unit ID don't match the
+    table, or an unknown verdict, stops the run, so a mixed-up ID can't exclude the wrong unit.
+    """
+    status = [""] * len(table)
+    if not REVIEW_FILE.exists():
+        return status
+    review = pd.read_csv(REVIEW_FILE, dtype={"verdict": str, "note": str})
+    for row in review.itertuples():
+        if row.probe != probe:
+            continue
+        positions = list(table.index[table.phy_cluster_id == row.phy_cluster_id])
+        if len(positions) != 1 or table.unit_id[positions[0]] != row.unit_id:
+            raise ValueError(
+                f"{REVIEW_FILE}: no unit on the {probe} probe has Phy ID {row.phy_cluster_id} "
+                f"and unit ID {row.unit_id}"
+            )
+        if pd.isna(row.verdict) or row.verdict.strip() == "":
+            verdict = "pending"
+        else:
+            verdict = row.verdict.strip().lower()
+        if verdict != "pending" and verdict not in REVIEW_VERDICTS:
+            raise ValueError(f"{REVIEW_FILE}: unknown verdict '{row.verdict}' for Phy {row.phy_cluster_id}")
+        status[positions[0]] = verdict
+    return status
+
+
 def build_unit_table(probe):
     """One row per unit of one probe: its measures, flags and the good-cell decision."""
     analyzer = load_analyzer(SESSION, probe)
@@ -160,11 +197,13 @@ def build_unit_table(probe):
         "area": [area_of(d, limits) for d in depth],
         "depth_um": depth,
         "num_spikes": num_spikes,
+        "firing_rate": metrics.firing_rate.values,  # spikes per second over the session
         "rp_contamination": metrics.rp_contamination.values,
         "acg_gap": acg_gap,
         "isi_violations_ratio": metrics.isi_violations_ratio.values,
         "snr": metrics.snr.values,
         "amplitude_median": metrics.amplitude_median.values,  # biggest deflection of the average spike (uV)
+        "nn_hit_rate": metrics.nn_hit_rate.values,  # separation from neighbouring units by waveform alone
         "presence_ratio": metrics.presence_ratio.values,
         "polarity": get_polarity(templates),
         "possible_duplicate_of": possible_duplicate_of,
@@ -172,17 +211,21 @@ def build_unit_table(probe):
     table["clean_acg"] = clean_acg
     # Rescued: Juan's score says contaminated, but the unit's own autocorrelogram has a clean gap
     table["rescued_by_acg"] = (table.rp_contamination > MAX_CONTAMINATION) & table.clean_acg
+    table["review_verdict"] = load_review_verdicts(probe, table)
 
     # The rule, one column per criterion. Written as "passes" so a missing value counts as a fail.
     passes = pd.DataFrame({
         "contamination": (table.rp_contamination <= MAX_CONTAMINATION) | table.rescued_by_acg,
         "spikes": table.num_spikes > MIN_SPIKES,
         "snr_or_amplitude": (table.snr >= MIN_SNR) | (table.amplitude_median > MIN_AMPLITUDE_UV),
+        "manual_review": table.review_verdict != "exclude",
     })
     passes_all = passes.all(axis=1).values
     # Check 1: the same rule with Juan's looser contamination cut
     loose_contamination = (table.rp_contamination < LOOSE_CONTAMINATION) | table.clean_acg
-    passes_loose = (loose_contamination & passes.spikes & passes.snr_or_amplitude).values
+    passes_loose = (
+        loose_contamination & passes.spikes & passes.snr_or_amplitude & passes.manual_review
+    ).values
 
     # Split neurons: keep one piece of each and mark the others as copies of it
     same_neuron_as = [None] * len(table)
@@ -246,15 +289,19 @@ def plot_histograms(units):
 
 def print_summary(units):
     """Per area: units, good units and main-analysis units (good and downward), then the main
-    analysis under check 1 (Juan's looser contamination cut) and check 2 (without the gap rescue)."""
+    analysis under check 1 (Juan's looser contamination cut) and check 2 (without the gap rescue),
+    and the manual review: units still waiting for a verdict and units it excluded."""
     for (probe, area), group in units.groupby(["probe", "area"]):
         good = group[group.good]
         main = group[group.main_analysis]
         rescued = main[main.rescued_by_acg]
         loose = group[group.main_analysis_loose]
+        pending = group[group.review_verdict == "pending"]
+        excluded = group[group.review_verdict == "exclude"]
         print(
             f"{probe} {area:13}  units {len(group):3}  good {len(good):3}  main analysis {len(main):3}  "
-            f"check 1 {len(loose):3}  check 2 {len(main) - len(rescued):3}  kept by gap rescue {len(rescued):2}"
+            f"check 1 {len(loose):3}  check 2 {len(main) - len(rescued):3}  kept by gap rescue {len(rescued):2}  "
+            f"review: pending {len(pending):2}, excluded {len(excluded):2}"
         )
 
 

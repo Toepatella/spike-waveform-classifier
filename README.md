@@ -6,7 +6,7 @@ to use another folder). See `DATA_DIR` in `load_data.py`.
 Run everything with `uv run main.py`, or run the steps one at a time:
 
 1. `uv run good_cells.py`: Task 0. Picks good cells, saves `outputs/good_cells_<session>.csv` and metric histograms.
-2. `uv run plot_waveforms.py`: Task 1. Sparse waveform plots of good, rejected and flagged units.
+2. `uv run plot_waveforms.py`: Task 1. Sparse waveform plots of good, rejected and flagged units, plus review sheets for the units listed for manual review.
 
 `outputs/` is ignored by git; rerun the scripts to recreate it.
 
@@ -50,6 +50,27 @@ three versions.
 Figure titles show two IDs. `unit` is SpikeInterface's unit ID and `Phy` is the cluster ID
 in Juan's Phy files. They differ for about half the units, so use Phy IDs with Juan.
 
+## Manual review
+
+`curation/manual_review_<session>.csv` lists the units for Juan to check by eye in Phy.
+These are the main-analysis units kept only because their autocorrelogram looks clean.
+
+To record a review:
+
+1. In the `verdict` column, type `keep`, `exclude` or `unsure` for each unit. Add a `note`
+   if useful.
+2. Rerun `uv run main.py`.
+
+How verdicts are used was fixed before the review:
+
+- `exclude` removes a unit from every version (main and both checks).
+- `keep` and `unsure` leave it in.
+- A review can never add a unit.
+
+The file uses Phy IDs, and each one is checked against its unit ID, so a mixed-up ID
+stops the run instead of excluding the wrong unit. `outputs/review_<session>_<area>.png`
+shows each listed unit's waveforms and autocorrelogram for the review.
+
 ## Data provenance
 
 Juan's pipeline, as recorded in the analyzer files:
@@ -58,3 +79,4 @@ Juan's pipeline, as recorded in the analyzer files:
 - Probes: Neuropixels 1.0 NHP at 30 kHz, with the probe's built-in 300 Hz filter off (`Broadband_rec.zarr`).
 - Before waveforms: ±5 ms around 640 events replaced by cubic interpolation; 300 Hz 2nd-order Butterworth high-pass, run forward and backward (zero-phase); global median reference; motion correction (kriging). No whitening.
 - Waveforms: up to 500 random spikes per unit, 2 ms either side of the peak.
+- Areas: Juan's estimates of where each area starts on the probe (`Anatomical_limits.pkl`). "PFC" is area 8/46.
