@@ -1,26 +1,26 @@
 probe,area,phy_cluster_id,unit_id,priority,verdict,note
-PFC,PFC,334,334,1,,
-PFC,PFC,357,357,1,,
-PFC,PFC,406,406,1,,
-PFC,PFC,454,454,1,,
-PFC,PFC,804,611,1,,
-PFC,PFC,891,641,1,,
-PFC,PFC,904,646,1,,
-PFC,PFC,918,652,1,,
-PFC,PFC,944,662,1,,
-HPC,DG,73,73,2,,
-HPC,DG,436,436,2,,
-HPC,DG,466,466,2,,
-HPC,DG,786,739,2,,
-HPC,DG,1039,836,2,,
-HPC,DG,1145,874,2,,
-HPC,CA3,147,147,3,,
-HPC,CA3,177,177,3,,
-HPC,CA3,200,200,3,,
-HPC,CA3,344,344,3,,
-HPC,CA3,603,603,3,,
-HPC,CA3,613,613,3,,
-HPC,CA3,1389,962,3,,
-HPC,CA3,1427,974,3,,
-HPC,CA3,1449,984,3,,
-HPC,CA3,1502,1002,3,,
+PFC,PFC,334,334,1,keep,under 0.5: good under the rule agreed at the 2026-11-04 review; not checked one by one
+PFC,PFC,357,357,1,keep,under 0.5: good under the rule agreed at the 2026-11-04 review; not checked one by one
+PFC,PFC,406,406,1,keep,under 0.5: good under the rule agreed at the 2026-11-04 review; not checked one by one
+PFC,PFC,454,454,1,keep,under 0.5: good under the rule agreed at the 2026-11-04 review; not checked one by one
+PFC,PFC,804,611,1,keep,under 0.5: good under the rule agreed at the 2026-11-04 review; not checked one by one
+PFC,PFC,891,641,1,keep,under 0.5: good under the rule agreed at the 2026-11-04 review; not checked one by one
+PFC,PFC,904,646,1,keep,under 0.5: good under the rule agreed at the 2026-11-04 review; not checked one by one
+PFC,PFC,918,652,1,keep,under 0.5: good under the rule agreed at the 2026-11-04 review; not checked one by one
+PFC,PFC,944,662,1,keep,under 0.5: good under the rule agreed at the 2026-11-04 review; not checked one by one
+HPC,DG,73,73,2,keep,under 0.5: good under the rule agreed at the 2026-11-04 review; not checked one by one
+HPC,DG,436,436,2,keep,under 0.5: good under the rule agreed at the 2026-11-04 review; not checked one by one
+HPC,DG,466,466,2,keep,under 0.5: good under the rule agreed at the 2026-11-04 review; not checked one by one
+HPC,DG,786,739,2,keep,under 0.5: good under the rule agreed at the 2026-11-04 review; not checked one by one
+HPC,DG,1039,836,2,,0.5 or above: fails the 0.5 cut; not checked one by one
+HPC,DG,1145,874,2,,0.5 or above: fails the 0.5 cut; not checked one by one
+HPC,CA3,147,147,3,keep,under 0.5: good under the rule agreed at the 2026-11-04 review; not checked one by one
+HPC,CA3,177,177,3,,0.5 or above: fails the 0.5 cut; not checked one by one
+HPC,CA3,200,200,3,keep,under 0.5: good under the rule agreed at the 2026-11-04 review; not checked one by one
+HPC,CA3,344,344,3,,0.5 or above: fails the 0.5 cut; not checked one by one
+HPC,CA3,603,603,3,,0.5 or above: fails the 0.5 cut; not checked one by one
+HPC,CA3,613,613,3,keep,under 0.5: good under the rule agreed at the 2026-11-04 review; not checked one by one
+HPC,CA3,1389,962,3,keep,under 0.5: good under the rule agreed at the 2026-11-04 review; not checked one by one
+HPC,CA3,1427,974,3,keep,under 0.5: good under the rule agreed at the 2026-11-04 review; not checked one by one
+HPC,CA3,1449,984,3,keep,under 0.5: good under the rule agreed at the 2026-11-04 review; not checked one by one
+HPC,CA3,1502,1002,3,keep,under 0.5: good under the rule agreed at the 2026-11-04 review; not checked one by one

@@ -22,10 +22,8 @@ def note(unit):
     notes = []
     if unit.fail_reason:
         notes.append(f"fails: {unit.fail_reason}")
-    if unit.good_loose and not unit.good:
-        notes.append("good at the 0.5 cut")
-    if unit.rescued_by_acg:
-        notes.append(f"clean autocorrelogram (gap {unit.acg_gap:.2f})")
+    if unit.good and not unit.good_strict:
+        notes.append("not in the strict check")
     if pd.notna(unit.same_neuron_as):
         notes.append(f"same neuron as {unit.same_neuron_as:.0f}")
     if pd.notna(unit.possible_duplicate_of):
@@ -118,7 +116,7 @@ def plot_review(analyzer, rows, title, path):
         )
         acg_ax.set_title(
             f"rp_contam {unit.rp_contamination:.2f}  gap {unit.acg_gap:.2f}\n"
-            f"nn_hit_rate {unit.nn_hit_rate:.2f}",
+            f"spike pairs 0.2-1 ms apart: {unit.rp_violations:.0f}",
             fontsize=8,
         )
     for ax in panels[2 * len(rows):]:
@@ -181,25 +179,21 @@ def plot_area(analyzer, probe_units, area):
     flagged = pd.concat([
         with_partners(in_area[in_area.same_neuron_as.notna()], "same_neuron_as", probe_units),
         with_partners(in_area[in_area.possible_duplicate_of.notna()], "possible_duplicate_of", probe_units),
-        good[good.rescued_by_acg],
         good[good.low_presence].head(UNITS_PER_FIGURE),
     ])
     plot_units(
         analyzer, flagged,
-        f"{area}: flagged units (duplicate pairs side by side, then rescued, then low presence)",
+        f"{area}: flagged units (duplicate pairs side by side, then low presence)",
         f"{prefix}_flagged.png",
     )
+    # Units in the main analysis but not in the strict check
+    main_only = in_area[in_area.main_analysis & ~in_area.main_analysis_strict]
+    main_only_sample = main_only.sample(min(UNITS_PER_FIGURE, len(main_only)), random_state=0)
     plot_acgs(
-        analyzer, good[good.rescued_by_acg],
-        f"{area}: autocorrelograms of units kept by the gap check", f"outputs/acg_{SESSION}_{area}_rescued.png",
-    )
-    # Check 1: what the looser 0.5 contamination cut would add to the main analysis
-    loose_only = in_area[in_area.main_analysis_loose & ~in_area.main_analysis]
-    loose_sample = loose_only.sample(min(UNITS_PER_FIGURE, len(loose_only)), random_state=0)
-    plot_acgs(
-        analyzer, loose_sample,
-        f"{area}: autocorrelograms of random units good only at the 0.5 cut ({len(loose_only)} in total)",
-        f"outputs/acg_{SESSION}_{area}_loose.png",
+        analyzer, main_only_sample,
+        f"{area}: autocorrelograms of random units in the main analysis but not the strict check "
+        f"({len(main_only)} in total)",
+        f"outputs/acg_{SESSION}_{area}_main_only.png",
     )
     # Manual review: the area's units listed in the review file, in Phy ID order
     listed = in_area[in_area.review_verdict != ""].sort_values("phy_cluster_id")

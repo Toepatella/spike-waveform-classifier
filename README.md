@@ -14,43 +14,43 @@ Run everything with `uv run main.py`, or run the steps one at a time:
 
 A good cell should give a clean average waveform from one neuron:
 
-- contamination (`rp_contamination`, Llobet et al. 2022) at most 10%;
+- contamination (`rp_contamination`, Llobet et al. 2022) below 0.5;
 - more than 500 spikes (the average waveforms use up to 500 random spikes);
 - SNR at least 3, or median amplitude above 30 µV, so big units on noisy channels still count;
 - not a split-off copy of another unit (near-identical template, and the two never fire
   within 1 ms of each other).
 
-The spike and size cuts were recommended with the sorted data (2026-11-02), along with a
-contamination cut of 0.5. Units that pass only at 0.5 look like mixed clusters on the
-waveform isolation scores (`nn_hit_rate`, silhouette). So 10% stays the main cut, and 0.5 is a
-robustness check.
+These cuts were recommended with the sorted data. `rp_contamination` compares a unit's spike
+pairs 0.2–1 ms apart (`rp_violations`; closer pairs were removed as duplicates) with the number
+expected if spikes from other neurons arrived at a steady rate, independent of the unit. When
+they rise and fall with the unit's own firing, the score reads high. The expected number grows
+with the square of the firing rate, so a unit below about 0.7 Hz passes only with no such pairs.
 
-`rp_contamination` assumes a steady firing rate, so bursty cells (mostly narrow-spiking) that
-fail it are kept anyway if their autocorrelogram shows a clean refractory gap
-(`clean_acg`). These units are marked in `rescued_by_acg`.
+`acg_gap` (pairs under 1 ms apart relative to 10–25 ms apart, from the autocorrelogram) and
+`nn_hit_rate` (separation from neighbouring units in PCA space, which falls with spike size) are
+in the table but not used in the rule.
 
 Positive-going (upward) spikes are likely axonal, so they stay in the table
 but are left out of the main analysis. Low-presence units are kept but flagged for a look.
 
-The main analysis and two robustness checks are columns in
-`outputs/good_cells_<session>.csv`:
+The main analysis and a strict check are columns in `outputs/good_cells_<session>.csv`:
 
-| Version | Units | How to select them |
+| Version | Units | Column |
 |---|---|---|
 | Main | good and downward | `main_analysis` |
-| Check 1 | as main, but contamination below 0.5 | `main_analysis_loose` |
-| Check 2 | as main, without the units kept by the autocorrelogram check | `main_analysis & ~rescued_by_acg` |
+| Strict check | as main, but contamination at most 0.1 | `main_analysis_strict` |
 
-The main version was chosen before any feature results existed. Report results for all
-three versions.
+The main version was fixed before the waveform-feature analysis. Results are reported for
+both versions.
 
 Figure titles show two IDs. `unit` is SpikeInterface's unit ID and `Phy` is the cluster ID
 in the Phy files. They differ for about half the units.
 
 ## Manual review
 
-`curation/manual_review_<session>.csv` lists the units to be checked by eye in Phy.
-These are the main-analysis units kept only because their autocorrelogram looks clean.
+`curation/manual_review_<session>.csv` lists units checked by eye in Phy. The 2026-07-21 list
+holds the units that an earlier rule (contamination at most 0.1, or a clean autocorrelogram)
+kept only because of their autocorrelogram.
 
 To record a review:
 
@@ -60,7 +60,7 @@ To record a review:
 
 How verdicts are used was fixed before the review:
 
-- `exclude` removes a unit from every version (main and both checks).
+- `exclude` removes a unit from every version (main and strict check).
 - `keep` and `unsure` leave it in.
 - A review can never add a unit.
 

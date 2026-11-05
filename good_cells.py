@@ -11,26 +11,23 @@ from load_data import area_of, load_analyzer, load_area_limits, load_metrics
 SESSION = "2026-07-21"
 PROBES = ["PFC", "HPC"]
 
-# Good-cell rule: a clean average waveform from one neuron. The spike-count and size cuts were
-# recommended with the sorted data (2026-11-02). The contamination cut stays at 0.1: units that
-# pass only at the recommended 0.5 look like mixed clusters on the waveform isolation scores.
-# 0.5 is kept as a robustness check (check 1, good_loose).
-MAX_CONTAMINATION = 0.1  # share of spikes from other neurons (rp_contamination, Llobet 2022)
-LOOSE_CONTAMINATION = 0.5  # recommended cut, used only for check 1
+# Good-cell rule: a clean average waveform from one neuron. All cuts were recommended with the
+# sorted data (2026-11-02; the contamination cut was confirmed at review on 2026-11-04).
+# rp_contamination compares a unit's spike pairs 0.2-1 ms apart (closer pairs were removed as
+# duplicates) with the number expected if spikes from other neurons arrived at a steady rate,
+# independent of the unit. When they rise and fall with the unit's own firing, the score reads
+# high. The expected number grows with the square of the firing rate, so below about 0.7 Hz a
+# single pair already gives 0.5 or more: slow units pass only with none.
+MAX_CONTAMINATION = 0.5  # share of spikes from other neurons (rp_contamination, Llobet 2022); below this
+STRICT_CONTAMINATION = 0.1  # strict check (good_strict): at most this
 MIN_SPIKES = 500  # need more than this; the average waveforms use up to 500 random spikes
 MIN_SNR = 3  # spike clearly above the channel's noise...
 MIN_AMPLITUDE_UV = 30  # ...or bigger than this (uV), so big units on noisy channels still count
-# rp_contamination assumes a steady firing rate, so it over-rejects bursty (mostly
-# narrow-spiking) cells. Rescue: keep a unit anyway if its own autocorrelogram shows a
-# clean refractory gap, which is judged against its local firing rate. Rescued units are
-# marked in rescued_by_acg, so later results can be checked with and without them.
-MAX_ACG_GAP = 0.1  # spike pairs under 1 ms apart, relative to 10-25 ms apart (about <6% contamination)
-MIN_ACG_BASELINE = 5  # spikes per 1 ms bin needed to trust the gap
 
 # Duplicates: near-identical templates. One neuron split in two never fires twice within
 # ~1 ms, so their cross-correlogram has a gap at zero lag. Keep one unit per neuron.
 DUPLICATE_SIMILARITY = 0.95
-SAME_NEURON_GAP = 0.3  # the same gap measure as MAX_ACG_GAP, for a pair of units
+SAME_NEURON_GAP = 0.3  # refractory_gap of the pair's cross-correlogram
 MIN_BASELINE = 2  # spikes per 1 ms bin needed to judge the gap
 
 # Flag only (kept, check by eye): low-presence units fire unevenly across the
@@ -120,15 +117,15 @@ def group_split_neurons(same_neuron_pairs, num_units):
     return [members for members in groups.values() if len(members) > 1]
 
 
-def choose_keeper(members, passes, rescued, num_spikes):
-    """Which piece of a split neuron to keep: one that passes the rule, preferably without the
-    gap rescue, then the one with the most spikes."""
+def choose_keeper(members, passes, passes_strict, num_spikes):
+    """Which piece of a split neuron to keep: one that passes the rule, preferably one that also
+    passes the strict check, then the one with the most spikes."""
     candidates = [k for k in members if passes[k]]
     if not candidates:
         candidates = members
-    without_rescue = [k for k in candidates if not rescued[k]]
-    if without_rescue:
-        candidates = without_rescue
+    strict = [k for k in candidates if passes_strict[k]]
+    if strict:
+        candidates = strict
     return max(candidates, key=lambda k: num_spikes[k])
 
 
@@ -175,13 +172,12 @@ def build_unit_table(probe):
     ccgs, bins = analyzer.get_extension("correlograms").get_data()  # units x units x 1 ms bins
     lag_ms = (bins[:-1] + bins[1:]) / 2  # centre of each bin
 
-    # Each unit's own refractory gap, from its autocorrelogram (its correlogram with itself)
+    # Each unit's own refractory gap, from its autocorrelogram (its correlogram with itself).
+    # Descriptive only, not part of the rule.
     acg_gap = []
-    clean_acg = []
     for k in range(len(unit_ids)):
         gap, baseline = refractory_gap(ccgs[k, k], lag_ms)
         acg_gap.append(gap)
-        clean_acg.append(gap < MAX_ACG_GAP and baseline >= MIN_ACG_BASELINE)
 
     same_neuron_pairs, possible_duplicate_of = find_duplicate_pairs(
         similarity, ccgs, lag_ms, num_spikes, unit_ids
@@ -196,38 +192,37 @@ def build_unit_table(probe):
         "num_spikes": num_spikes,
         "firing_rate": metrics.firing_rate.values,  # spikes per second over the session
         "rp_contamination": metrics.rp_contamination.values,
+        "rp_violations": metrics.rp_violations.values,  # spike pairs 0.2-1 ms apart
         "acg_gap": acg_gap,
         "isi_violations_ratio": metrics.isi_violations_ratio.values,
         "snr": metrics.snr.values,
         "amplitude_median": metrics.amplitude_median.values,  # biggest deflection of the average spike (uV)
-        "nn_hit_rate": metrics.nn_hit_rate.values,  # separation from neighbouring units by waveform alone
+        # separation from neighbouring units by waveform alone; falls with spike size, not used in the rule
+        "nn_hit_rate": metrics.nn_hit_rate.values,
         "presence_ratio": metrics.presence_ratio.values,
         "polarity": get_polarity(templates),
         "possible_duplicate_of": possible_duplicate_of,
     })
-    table["clean_acg"] = clean_acg
-    # Rescued: rp_contamination says contaminated, but the unit's own autocorrelogram has a clean gap
-    table["rescued_by_acg"] = (table.rp_contamination > MAX_CONTAMINATION) & table.clean_acg
     table["review_verdict"] = load_review_verdicts(probe, table)
 
     # The rule, one column per criterion. Written as "passes" so a missing value counts as a fail.
     passes = pd.DataFrame({
-        "contamination": (table.rp_contamination <= MAX_CONTAMINATION) | table.rescued_by_acg,
+        "contamination": table.rp_contamination < MAX_CONTAMINATION,
         "spikes": table.num_spikes > MIN_SPIKES,
         "snr_or_amplitude": (table.snr >= MIN_SNR) | (table.amplitude_median > MIN_AMPLITUDE_UV),
         "manual_review": table.review_verdict != "exclude",
     })
     passes_all = passes.all(axis=1).values
-    # Check 1: the same rule with the looser 0.5 contamination cut
-    loose_contamination = (table.rp_contamination < LOOSE_CONTAMINATION) | table.clean_acg
-    passes_loose = (
-        loose_contamination & passes.spikes & passes.snr_or_amplitude & passes.manual_review
+    # Strict check: the same rule with contamination at most 0.1
+    strict_contamination = table.rp_contamination <= STRICT_CONTAMINATION
+    passes_strict = (
+        strict_contamination & passes.spikes & passes.snr_or_amplitude & passes.manual_review
     ).values
 
     # Split neurons: keep one piece of each and mark the others as copies of it
     same_neuron_as = [None] * len(table)
     for members in group_split_neurons(same_neuron_pairs, len(table)):
-        keeper = choose_keeper(members, passes_all, table.rescued_by_acg.values, num_spikes)
+        keeper = choose_keeper(members, passes_all, passes_strict, num_spikes)
         for k in members:
             if k != keeper:
                 same_neuron_as[k] = unit_ids[keeper]
@@ -244,16 +239,16 @@ def build_unit_table(probe):
         fail_reason.append("+".join(failed))
     table["fail_reason"] = fail_reason
     table["good"] = ~fails.any(axis=1)
-    # Check 1: good at the looser cut. A copy is dropped only if the piece it copies passes it too.
-    copies_loose_keeper = table.same_neuron_as.isin(table.unit_id[passes_loose])
-    table["good_loose"] = passes_loose & ~copies_loose_keeper.values
+    # Strict check: good at the 0.1 cut. A copy is dropped only if the piece it copies passes it too.
+    copies_strict_keeper = table.same_neuron_as.isin(table.unit_id[passes_strict])
+    table["good_strict"] = passes_strict & ~copies_strict_keeper.values
     return table
 
 
 def plot_histograms(units):
     """Histograms of each measure with its cutoff in red, one figure per probe.
 
-    The contamination panel also shows the looser 0.5 cut (check 1) as a dotted line.
+    The contamination panel also shows the strict 0.1 cut as a dotted line.
     """
     panels = [
         # (column, cutoff, bin edges)
@@ -271,13 +266,13 @@ def plot_histograms(units):
             ax.hist(probe_units[column].clip(bins[0], bins[-1]), bins=bins, color="gray")
             ax.axvline(cutoff, color="red", linestyle="--")
             ax.set_title(column)
-        axes[0].axvline(LOOSE_CONTAMINATION, color="red", linestyle=":")
-        axes[0].set_title("rp_contamination (dotted: check 1)")
+        axes[0].axvline(STRICT_CONTAMINATION, color="red", linestyle=":")
+        axes[0].set_title("rp_contamination (dotted: strict check)")
         axes[1].set_xscale("log")
         axes[3].set_title("amplitude_median (uV)")
         fig.suptitle(
             f"{probe}: {probe_units.good.sum()} of {len(probe_units)} good "
-            f"({probe_units.good_loose.sum()} at the 0.5 contamination cut)"
+            f"({probe_units.good_strict.sum()} at the strict 0.1 cut)"
         )
         fig.tight_layout()
         fig.savefig(f"outputs/metrics_{SESSION}_{probe}.png", dpi=110)
@@ -285,20 +280,18 @@ def plot_histograms(units):
 
 
 def print_summary(units):
-    """Per area: units, good units and main-analysis units (good and downward), then the main
-    analysis under check 1 (the 0.5 contamination cut) and check 2 (without the gap rescue),
-    and the manual review: units still waiting for a verdict and units it excluded."""
+    """Per area: units, good units and main-analysis units (good and downward), the main analysis
+    under the strict check, and the manual review: units still waiting for a verdict and units it
+    excluded."""
     for (probe, area), group in units.groupby(["probe", "area"]):
         good = group[group.good]
         main = group[group.main_analysis]
-        rescued = main[main.rescued_by_acg]
-        loose = group[group.main_analysis_loose]
+        strict = group[group.main_analysis_strict]
         pending = group[group.review_verdict == "pending"]
         excluded = group[group.review_verdict == "exclude"]
         print(
             f"{probe} {area:13}  units {len(group):3}  good {len(good):3}  main analysis {len(main):3}  "
-            f"check 1 {len(loose):3}  check 2 {len(main) - len(rescued):3}  kept by gap rescue {len(rescued):2}  "
-            f"review: pending {len(pending):2}, excluded {len(excluded):2}"
+            f"strict check {len(strict):3}  review: pending {len(pending):2}, excluded {len(excluded):2}"
         )
 
 
@@ -312,7 +305,7 @@ def main():
     # Upward spikes are likely axons, not cell bodies, and trough-based features
     # don't fit them. They stay in the table but out of the main analysis.
     units["main_analysis"] = units.good & (units.polarity == "negative")
-    units["main_analysis_loose"] = units.good_loose & (units.polarity == "negative")
+    units["main_analysis_strict"] = units.good_strict & (units.polarity == "negative")
     units.to_csv(f"outputs/good_cells_{SESSION}.csv", index=False)
     plot_histograms(units)
     print_summary(units)
