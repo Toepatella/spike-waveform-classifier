@@ -5,11 +5,10 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from scipy import stats
 
 from load_data import area_of, load_analyzer, load_area_limits, load_metrics
-
-SESSION = "2026-07-21"
-PROBES = ["PFC", "HPC"]
+from sessions import get_session, session_from_command_line
 
 # Good-cell rule: a clean average waveform from one neuron. All cuts were recommended with the
 # sorted data (2026-11-02; the contamination cut was confirmed at review on 2026-11-04).
@@ -24,22 +23,45 @@ MIN_SPIKES = 500  # need more than this; the average waveforms use up to 500 ran
 MIN_SNR = 3  # spike clearly above the channel's noise...
 MIN_AMPLITUDE_UV = 30  # ...or bigger than this (uV), so big units on noisy channels still count
 
+# Lower bound of rp_contamination, not part of the rule: the lower end of its exact 95% interval.
+# For a unit below MAX_CONTAMINATION it can exceed 0.20 only with many spikes (from about 7,600 in
+# a 52-minute session).
+REFRACTORY_MS = 1.0  # rp_violations: spike pairs at most this far apart
+CENSOR_MS = 0.2  # spikes closer than this within a unit were removed as duplicates
+INTERVAL_LEVEL = 0.95  # exact (Garwood) Poisson interval on rp_violations
+
+# Near-limit sensitivity, not part of the rule: the area limits are estimates, so units just above
+# the top of the white matter may be white-matter units.
+NEAR_LIMIT_UM = 100
+WHITE_MATTER = "White Matter"
+
 # Duplicates: near-identical templates. One neuron split in two never fires twice within
 # ~1 ms, so their cross-correlogram has a gap at zero lag. Keep one unit per neuron.
 DUPLICATE_SIMILARITY = 0.95
 SAME_NEURON_GAP = 0.3  # refractory_gap of the pair's cross-correlogram
 MIN_BASELINE = 2  # spikes per 1 ms bin needed to judge the gap
 
-# Flag only (kept, check by eye): low-presence units fire unevenly across the
-# session (silent for long stretches), not just slowly
+# Flag only, used by no version: low-presence units fire unevenly across the session (silent for
+# long stretches), not just slowly
 LOW_PRESENCE = 0.5
 
 # Manual review (rule fixed on 2026-11-03, before the review and before any Task 2 results):
-# The units kept only by the gap rescue are checked by eye, and the verdicts are typed into
-# this file. "exclude" removes a unit from every version; "keep" and "unsure" leave it in.
-# The review can only remove units, never add them.
-REVIEW_FILE = Path("curation") / f"manual_review_{SESSION}.csv"
+# verdicts on units checked by eye are typed into the session's review file. "exclude" removes a
+# unit from every version; "keep" and "unsure" leave it in. The review can only remove units,
+# never add them.
 REVIEW_VERDICTS = ["keep", "exclude", "unsure"]
+
+
+def review_file(session):
+    """The session's manual review file."""
+    return Path("curation") / f"manual_review_{session}.csv"
+
+
+def largest_channel(template):
+    """The channel with the largest |value| of one unit's template (time x channels): the channel
+    the polarity rule and the waveform features use."""
+    biggest_per_channel = np.abs(template).max(axis=0)  # each channel's largest |value| over time
+    return int(biggest_per_channel.argmax())
 
 
 def get_polarity(templates):
@@ -49,13 +71,47 @@ def get_polarity(templates):
     """
     polarity = []
     for template in templates:  # one unit: time x channels
-        biggest_channel = np.abs(template).max(axis=0).argmax()
-        trace = template[:, biggest_channel]
+        trace = template[:, largest_channel(template)]
         if abs(trace.min()) >= abs(trace.max()):
             polarity.append("negative")
         else:
             polarity.append("positive")
     return polarity
+
+
+def contamination_from_pairs(num_pairs, num_spikes, total_samples, fs):
+    """Share of spikes from other neurons, c, implied by a number of refractory pairs (the count
+    itself, or an end of its confidence interval), by the rp_contamination formula
+    pairs = c (2 - c) N^2 (t_r - t_c) / (T - 2 N t_c), with N spikes, T samples in the recording,
+    and t_r and t_c the refractory and censored periods in samples."""
+    t_r = round(REFRACTORY_MS * fs / 1000)
+    t_c = round(CENSOR_MS * fs / 1000)
+    # the pairs expected if every spike came from other neurons (c = 1)
+    pairs_if_all_stray = num_spikes**2 * (t_r - t_c) / (total_samples - 2 * num_spikes * t_c)
+    ratio = num_pairs / pairs_if_all_stray
+    if ratio >= 1:
+        return 1.0
+    return 1 - np.sqrt(1 - ratio)  # c (2 - c) = ratio, solved for c
+
+
+def contamination_lower_bound(num_pairs, num_spikes, total_samples, fs):
+    """Lower end of the 95% confidence interval of rp_contamination: the lowest Poisson mean
+    consistent with the pair count, put through the same formula. 0 for a unit with no pairs."""
+    if num_pairs == 0:
+        return 0.0
+    # Garwood (1936): the lowest Poisson mean consistent with num_pairs at 95% is half the 2.5%
+    # point of a chi-square distribution with 2 x num_pairs degrees of freedom
+    lowest_mean_pairs = stats.chi2.ppf((1 - INTERVAL_LEVEL) / 2, 2 * num_pairs) / 2
+    return contamination_from_pairs(lowest_mean_pairs, num_spikes, total_samples, fs)
+
+
+def near_white_matter(depth_um, limits):
+    """True for a unit outside the white matter within NEAR_LIMIT_UM above its top. Always False on
+    a probe with no white-matter limit."""
+    if WHITE_MATTER not in limits:
+        return False
+    top = limits[WHITE_MATTER]
+    return top < depth_um <= top + NEAR_LIMIT_UM
 
 
 def refractory_gap(correlogram, lag_ms):
@@ -129,24 +185,37 @@ def choose_keeper(members, passes, passes_strict, num_spikes):
     return max(candidates, key=lambda k: num_spikes[k])
 
 
-def load_review_verdicts(probe, table):
+def one_piece_per_neuron(groups, passes, passes_strict, num_spikes):
+    """For one version of the rule: True for each unit that passes it, except that each split neuron
+    keeps only one piece, chosen by choose_keeper among the pieces that pass this version."""
+    kept = list(passes)
+    for members in groups:
+        keeper = choose_keeper(members, passes, passes_strict, num_spikes)
+        for k in members:
+            if k != keeper:
+                kept[k] = False
+    return kept
+
+
+def load_review_verdicts(session, probe, table):
     """Each unit's status in the manual review file, in table order.
 
     "" means not listed for review, "pending" means listed but not reviewed yet, and otherwise
     it's the verdict typed into the file. A listed unit whose Phy ID and unit ID don't match the
     table, or an unknown verdict, stops the run, so a mixed-up ID can't exclude the wrong unit.
     """
+    path = review_file(session)
     status = [""] * len(table)
-    if not REVIEW_FILE.exists():
+    if not path.exists():
         return status
-    review = pd.read_csv(REVIEW_FILE, dtype={"verdict": str, "note": str})
+    review = pd.read_csv(path, dtype={"verdict": str, "note": str})
     for row in review.itertuples():
         if row.probe != probe:
             continue
         positions = list(table.index[table.phy_cluster_id == row.phy_cluster_id])
         if len(positions) != 1 or table.unit_id[positions[0]] != row.unit_id:
             raise ValueError(
-                f"{REVIEW_FILE}: no unit on the {probe} probe has Phy ID {row.phy_cluster_id} "
+                f"{path}: no unit on the {probe} probe has Phy ID {row.phy_cluster_id} "
                 f"and unit ID {row.unit_id}"
             )
         if pd.isna(row.verdict) or row.verdict.strip() == "":
@@ -154,19 +223,22 @@ def load_review_verdicts(probe, table):
         else:
             verdict = row.verdict.strip().lower()
         if verdict != "pending" and verdict not in REVIEW_VERDICTS:
-            raise ValueError(f"{REVIEW_FILE}: unknown verdict '{row.verdict}' for Phy {row.phy_cluster_id}")
+            raise ValueError(f"{path}: unknown verdict '{row.verdict}' for Phy {row.phy_cluster_id}")
         status[positions[0]] = verdict
     return status
 
 
-def build_unit_table(probe):
+def build_unit_table(session, probe):
     """One row per unit of one probe: its measures, flags and the good-cell decision."""
-    analyzer = load_analyzer(SESSION, probe)
-    metrics = load_metrics(SESSION, probe).loc[analyzer.unit_ids]  # same unit order as the analyzer
+    analyzer = load_analyzer(session, probe)
+    metrics = load_metrics(session, probe).loc[analyzer.unit_ids]  # same unit order as the analyzer
     unit_ids = list(metrics.index)
     num_spikes = metrics.num_spikes.values
+    rp_violations = metrics.rp_violations.values
+    total_samples = analyzer.get_total_samples()
+    fs = analyzer.sampling_frequency
     depth = analyzer.get_extension("unit_locations").get_data()[:, 1]  # y: position along the probe (um)
-    limits = load_area_limits(SESSION, probe)
+    limits = load_area_limits(session, probe)
     templates = analyzer.get_extension("templates").get_data(operator="average")  # units x time x channels
     similarity = analyzer.get_extension("template_similarity").get_data()  # units x units
     ccgs, bins = analyzer.get_extension("correlograms").get_data()  # units x units x 1 ms bins
@@ -179,20 +251,29 @@ def build_unit_table(probe):
         gap, baseline = refractory_gap(ccgs[k, k], lag_ms)
         acg_gap.append(gap)
 
+    # The lower end of each unit's contamination interval, from its refractory pairs
+    rp_contamination_lower = []
+    for k in range(len(unit_ids)):
+        bound = contamination_lower_bound(rp_violations[k], num_spikes[k], total_samples, fs)
+        rp_contamination_lower.append(bound)
+
     same_neuron_pairs, possible_duplicate_of = find_duplicate_pairs(
         similarity, ccgs, lag_ms, num_spikes, unit_ids
     )
 
     table = pd.DataFrame({
+        "session": session,
         "probe": probe,
         "unit_id": unit_ids,
         "phy_cluster_id": analyzer.get_sorting_property("original_cluster_id"),
         "area": [area_of(d, limits) for d in depth],
         "depth_um": depth,
+        "near_wm_limit": [near_white_matter(d, limits) for d in depth],
         "num_spikes": num_spikes,
         "firing_rate": metrics.firing_rate.values,  # spikes per second over the session
         "rp_contamination": metrics.rp_contamination.values,
-        "rp_violations": metrics.rp_violations.values,  # spike pairs 0.2-1 ms apart
+        "rp_contamination_lower": rp_contamination_lower,  # lower end of its exact 95% interval; not in the rule
+        "rp_violations": rp_violations,  # spike pairs 0.2-1 ms apart
         "acg_gap": acg_gap,
         "isi_violations_ratio": metrics.isi_violations_ratio.values,
         "snr": metrics.snr.values,
@@ -203,7 +284,7 @@ def build_unit_table(probe):
         "polarity": get_polarity(templates),
         "possible_duplicate_of": possible_duplicate_of,
     })
-    table["review_verdict"] = load_review_verdicts(probe, table)
+    table["review_verdict"] = load_review_verdicts(session, probe, table)
 
     # The rule, one column per criterion. Written as "passes" so a missing value counts as a fail.
     passes = pd.DataFrame({
@@ -218,10 +299,15 @@ def build_unit_table(probe):
     passes_strict = (
         strict_contamination & passes.spikes & passes.snr_or_amplitude & passes.manual_review
     ).values
+    # SNR-only check: the same rule with SNR at least 3 alone, without the amplitude clause
+    passes_snr_only = (
+        passes.contamination & passes.spikes & (table.snr >= MIN_SNR) & passes.manual_review
+    ).values
 
     # Split neurons: keep one piece of each and mark the others as copies of it
+    groups = group_split_neurons(same_neuron_pairs, len(table))
     same_neuron_as = [None] * len(table)
-    for members in group_split_neurons(same_neuron_pairs, len(table)):
+    for members in groups:
         keeper = choose_keeper(members, passes_all, passes_strict, num_spikes)
         for k in members:
             if k != keeper:
@@ -242,10 +328,16 @@ def build_unit_table(probe):
     # Strict check: good at the 0.1 cut. A copy is dropped only if the piece it copies passes it too.
     copies_strict_keeper = table.same_neuron_as.isin(table.unit_id[passes_strict])
     table["good_strict"] = passes_strict & ~copies_strict_keeper.values
+    # SNR-only check: one piece per split neuron, chosen among the pieces that pass it. (The main
+    # keeper can pass only through the amplitude clause while other pieces pass this check, so the
+    # main keeper can't be reused here.)
+    table["good_snr_only"] = one_piece_per_neuron(
+        groups, passes_snr_only, passes_strict & passes_snr_only, num_spikes
+    )
     return table
 
 
-def plot_histograms(units):
+def plot_histograms(units, session):
     """Histograms of each measure with its cutoff in red, one figure per probe.
 
     The contamination panel also shows the strict 0.1 cut as a dotted line.
@@ -258,7 +350,7 @@ def plot_histograms(units):
         ("amplitude_median", MIN_AMPLITUDE_UV, np.linspace(0, 200, 50)),
         ("presence_ratio", LOW_PRESENCE, np.linspace(0, 1, 50)),
     ]
-    for probe in PROBES:
+    for probe in get_session(session)["probes"]:
         probe_units = units[units.probe == probe]
         fig, axes = plt.subplots(1, len(panels), figsize=(20, 3.5))
         for ax, (column, cutoff, bins) in zip(axes, panels):
@@ -275,41 +367,55 @@ def plot_histograms(units):
             f"({probe_units.good_strict.sum()} at the strict 0.1 cut)"
         )
         fig.tight_layout()
-        fig.savefig(f"outputs/metrics_{SESSION}_{probe}.png", dpi=110)
+        fig.savefig(f"outputs/metrics_{session}_{probe}.png", dpi=110)
         plt.close(fig)
 
 
 def print_summary(units):
     """Per area: units, good units and main-analysis units (good and downward), the main analysis
-    under the strict check, and the manual review: units still waiting for a verdict and units it
-    excluded."""
+    under the strict and SNR-only checks, and the manual review: units still waiting for a verdict
+    and units it excluded."""
     for (probe, area), group in units.groupby(["probe", "area"]):
         good = group[group.good]
         main = group[group.main_analysis]
         strict = group[group.main_analysis_strict]
+        snr_only = group[group.main_analysis_snr_only]
         pending = group[group.review_verdict == "pending"]
         excluded = group[group.review_verdict == "exclude"]
         print(
             f"{probe} {area:13}  units {len(group):3}  good {len(good):3}  main analysis {len(main):3}  "
-            f"strict check {len(strict):3}  review: pending {len(pending):2}, excluded {len(excluded):2}"
+            f"strict check {len(strict):3}  SNR only {len(snr_only):3}  "
+            f"review: pending {len(pending):2}, excluded {len(excluded):2}"
         )
 
 
-def main():
+def check_areas_found(units, session):
+    """Stops the run if an area listed for a probe in sessions.py holds no unit, which happens when
+    its name doesn't match the probe's area-limits file."""
+    for probe, areas in get_session(session)["probes"].items():
+        found = sorted(units.area[units.probe == probe].unique())
+        for area in areas:
+            if area not in found:
+                raise SystemExit(f"{session}: no unit on the {probe} probe is in area '{area}'; areas found: {found}")
+
+
+def main(session):
     Path("outputs").mkdir(exist_ok=True)
     tables = []
-    for probe in PROBES:
-        tables.append(build_unit_table(probe))
+    for probe in get_session(session)["probes"]:
+        tables.append(build_unit_table(session, probe))
     units = pd.concat(tables, ignore_index=True)
+    check_areas_found(units, session)
     units["low_presence"] = units.presence_ratio < LOW_PRESENCE
     # Upward spikes are likely axons, not cell bodies, and trough-based features
     # don't fit them. They stay in the table but out of the main analysis.
     units["main_analysis"] = units.good & (units.polarity == "negative")
     units["main_analysis_strict"] = units.good_strict & (units.polarity == "negative")
-    units.to_csv(f"outputs/good_cells_{SESSION}.csv", index=False)
-    plot_histograms(units)
+    units["main_analysis_snr_only"] = units.good_snr_only & (units.polarity == "negative")
+    units.to_csv(f"outputs/good_cells_{session}.csv", index=False)
+    plot_histograms(units, session)
     print_summary(units)
 
 
 if __name__ == "__main__":
-    main()
+    main(session_from_command_line())

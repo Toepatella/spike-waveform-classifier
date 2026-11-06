@@ -11,9 +11,8 @@ import pandas as pd
 import spikeinterface.widgets as sw
 
 from load_data import load_analyzer
+from sessions import get_session, session_from_command_line
 
-SESSION = "2026-07-21"
-AREAS = {"PFC": ["PFC"], "HPC": ["CA3", "DG"]}  # which areas to plot on each probe
 UNITS_PER_FIGURE = 8
 
 
@@ -150,12 +149,12 @@ def pick_rejected_examples(rejected):
     return examples.sort_values("fail_reason")
 
 
-def plot_area(analyzer, probe_units, area):
+def plot_area(analyzer, probe_units, area, session):
     """All figures for one brain area."""
     in_area = probe_units[probe_units.area == area]
     good = in_area[in_area.good]
     rejected = in_area[~in_area.good]
-    prefix = f"outputs/waveforms_{SESSION}_{area}"
+    prefix = f"outputs/waveforms_{session}_{area}"
 
     main = in_area[in_area.main_analysis]  # good and downward
     upward = good[~good.main_analysis]
@@ -193,27 +192,27 @@ def plot_area(analyzer, probe_units, area):
         analyzer, main_only_sample,
         f"{area}: autocorrelograms of random units in the main analysis but not the strict check "
         f"({len(main_only)} in total)",
-        f"outputs/acg_{SESSION}_{area}_main_only.png",
+        f"outputs/acg_{session}_{area}_main_only.png",
     )
     # Manual review: the area's units listed in the review file, in Phy ID order
     listed = in_area[in_area.review_verdict != ""].sort_values("phy_cluster_id")
     plot_review(
         analyzer, listed,
         f"{area}: units for manual review ({len(listed)}). One neuron, or a mix?",
-        f"outputs/review_{SESSION}_{area}.png",
+        f"outputs/review_{session}_{area}.png",
     )
 
 
-def main():
-    units = pd.read_csv(f"outputs/good_cells_{SESSION}.csv")
+def main(session):
+    units = pd.read_csv(f"outputs/good_cells_{session}.csv")
     units["fail_reason"] = units.fail_reason.fillna("")  # good units have no fail reason
     units["review_verdict"] = units.review_verdict.fillna("")  # units not listed for review
-    for probe, areas in AREAS.items():
-        analyzer = load_analyzer(SESSION, probe)  # slow, so load once per probe
+    for probe, areas in get_session(session)["probes"].items():
+        analyzer = load_analyzer(session, probe)  # slow, so load once per probe
         probe_units = units[units.probe == probe]
         for area in areas:
-            plot_area(analyzer, probe_units, area)
+            plot_area(analyzer, probe_units, area, session)
 
 
 if __name__ == "__main__":
-    main()
+    main(session_from_command_line())
